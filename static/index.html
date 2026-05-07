@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Camera Stream | WebRTC Real-Time Video</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <!-- <link rel="alternate icon" href="/static/favicon-16.svg"> -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon.png">
+    <link rel="mask-icon" href="/static/favicon.svg" color="#D6FE53">
+    
+    <!-- Meta tags adicionales -->
+    <meta name="theme-color" content="#D6FE53">
+    <meta name="description" content="Real-time robot camera streaming using WebRTC">
+</head>
+
+<body>
+    <h1>🤖 Robot Camera Stream</h1>
+
+    <button id="start">Start connection 🚀</button>
+
+    <!-- Contenedor de videos -->
+    <div id="video-container">
+        <div class="video-wrapper">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-label">📺 Robot Camera</div>
+        </div>
+    </div>
+
+    <!-- Chat section -->
+    <div id="chat-section">
+        <div id="log"></div>
+        <div id="message-section">
+            <input id="message" type="text" placeholder="Send a message...">
+            <button id="send" disabled>Send 📤<</button>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+
+</body>
+
+</html>

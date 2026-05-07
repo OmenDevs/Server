@@ -4,3 +4,4 @@ rich==14.0.0
 python-dotenv==1.1.0
 opencv-python==4.11.0.86
 av
+cyclonedds

@@ -5,11 +5,25 @@ import json
 import platform
 import sys
 
+# Force CycloneDDS to use Domain 0 and wlan0
+os.environ["CYCLONEDDS_URI"] = (
+    '<CycloneDDS><Domain id="0"><General>'
+    '<NetworkInterfaceAddress>wlan0</NetworkInterfaceAddress>'
+    '</General></Domain></CycloneDDS>'
+)
+
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 from rich.console import Console
 from dotenv import load_dotenv
+
+from dataclasses import dataclass
+from cyclonedds.domain import DomainParticipant
+from cyclonedds.pub import DataWriter
+from cyclonedds.topic import Topic
+from cyclonedds.idl import IdlStruct
+from cyclonedds.idl.types import float32
 
 try:
     from realsense_track import RealSenseTrack
@@ -42,6 +56,34 @@ KEY_FILE           = os.getenv("KEY_FILE", os.path.join(ROOT, "key.pem"))
 
 # Active peer connections dictionary for managing multiple clients.
 active_connections = {}
+
+
+# DDS velocity command structure published to the robot.
+@dataclass
+class VelocityCommand(IdlStruct, typename="VelocityCommand"):
+    vx: float32
+    vy: float32
+    omega: float32
+
+
+console.log("Initializing CycloneDDS...")
+try:
+    dds_dp = DomainParticipant(0)
+    dds_topic = Topic(dds_dp, "VelocityTopic", VelocityCommand)
+    dds_writer = DataWriter(dds_dp, dds_topic)
+    console.log("✅ CycloneDDS Publisher Ready")
+except Exception as e:
+    console.log(f"❌ Failed to initialize CycloneDDS: {e}")
+    sys.exit(1)
+
+
+def stop_robot_dds():
+    """Publish a zero-velocity command so the robot halts safely."""
+    try:
+        dds_writer.write(VelocityCommand(vx=0.0, vy=0.0, omega=0.0))
+        console.log("🛑 Robot safely stopped via DDS.")
+    except Exception as e:
+        console.log(f"⚠️ Failed to send DDS stop command: {e}")
 
 def get_camera_track():
     """Returns a video track from the robot camera."""
@@ -137,8 +179,8 @@ async def offer(request):
                 console.log("⚠️ Command rejected — video stream not active")
                 channel.send("⚠️ Cannot send commands without active video")
                 return
-            console.log(f"📩 Command: {message}")
-            if message.startswith("stream:"):
+
+            if isinstance(message, str) and message.startswith("stream:"):
                 stream_type = message.split(":")[1]
                 if isinstance(video_track, RealSenseTrack):
                     video_track.set_stream(stream_type)
@@ -147,14 +189,25 @@ async def offer(request):
                     channel.send("⚠️ RealSense not active (using fallback player)")
                 return
 
-            # TODO: forward robot control commands here
-            channel.send(f"📢 Echo: {message}")
+            try:
+                cmd = json.loads(message)
+                if all(k in cmd for k in ("vx", "vy", "omega")):
+                    dds_writer.write(VelocityCommand(
+                        vx=float(cmd["vx"]),
+                        vy=float(cmd["vy"]),
+                        omega=float(cmd["omega"]),
+                    ))
+                    return
+                console.log(f"📩 Unrecognized JSON format: {cmd}")
+            except json.JSONDecodeError:
+                console.log(f"📩 Raw Text Command: {message}")
+                channel.send(f"📢 Echo: {message}")
         
         # This events are triggered when the data channel is closed/error.
         def on_data_channel_issue(reason: str):
             console.log(f"⚠️ Data channel issue: {reason}")
             console.log(f"🗑️ Eliminating {pc_id} from active connections")
-            # TODO: forward robot stop command here
+            stop_robot_dds()
             active_connections.pop(pc_id, None)
             console.log(f"📊 Active connections: {len(active_connections)}")
         @channel.on('close')
@@ -177,7 +230,7 @@ async def offer(request):
                     console.log(f"⚠️ Error stopping recorder: {e}")
             video_track_active = False
             await pc.close()
-            # TODO: forward robot stop command here
+            stop_robot_dds()
             active_connections.pop(pc_id, None)
             console.log(f"🗑️  Removed {pc_id}. Active: {len(active_connections)}")
 
@@ -218,8 +271,9 @@ async def stop(request):
         except Exception as e:
             console.log(f"⚠️ Error closing peer connection {pc_id}: {e}")
 
+        stop_robot_dds()
         active_connections.pop(pc_id, None)
-        
+
         return web.Response(text="ok")
     return web.Response(status=404, text="not found")
 

@@ -1,7 +1,7 @@
-aiohttp==3.12.13
+aiohttp==3.13.5
 aiortc==1.13.0
-rich==14.0.0
-python-dotenv==1.1.0
-opencv-python==4.11.0.86
-av
-cyclonedds
+rich==15.0.0
+python-dotenv==1.2.1
+opencv-python==4.13.0.92
+av==14.2.0
+cyclonedds==0.10.5

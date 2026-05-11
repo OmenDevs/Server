@@ -5,19 +5,27 @@ import json
 import platform
 import sys
 
-# Force CycloneDDS to use Domain 0 and wlan0
+from dotenv import load_dotenv
+
+# Load environment variables from the .env
+load_dotenv(override=True)
+
+# Force CycloneDDS to Domain 0 on the chosen interface (default wlan0 for the linux;
+# override with en0 when running on macOS).
+_dds_iface = os.getenv("CYCLONEDDS_NETWORK_INTERFACE", "wlan0")
 os.environ["CYCLONEDDS_URI"] = (
-    '<CycloneDDS><Domain id="0"><General>'
-    '<NetworkInterfaceAddress>wlan0</NetworkInterfaceAddress>'
-    '</General></Domain></CycloneDDS>'
+    f'<CycloneDDS><Domain id="0"><General>'
+    f'<NetworkInterfaceAddress>{_dds_iface}</NetworkInterfaceAddress>'
+    f'</General></Domain></CycloneDDS>'
 )
 
 from aiohttp import web
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 from rich.console import Console
-from dotenv import load_dotenv
 
+
+# --- CycloneDDS Imports ---
 from dataclasses import dataclass
 from cyclonedds.domain import DomainParticipant
 from cyclonedds.pub import DataWriter
@@ -30,9 +38,6 @@ try:
     REALSENSE_AVAILABLE = True
 except Exception:
     REALSENSE_AVAILABLE = False
-
-# Load environment variables from the .env file
-load_dotenv(override=True)
 
 # Create the web application with aiohttp
 app = web.Application()
@@ -178,15 +183,6 @@ async def offer(request):
             if not video_track_active:
                 console.log("⚠️ Command rejected — video stream not active")
                 channel.send("⚠️ Cannot send commands without active video")
-                return
-
-            if isinstance(message, str) and message.startswith("stream:"):
-                stream_type = message.split(":")[1]
-                if isinstance(video_track, RealSenseTrack):
-                    video_track.set_stream(stream_type)
-                    channel.send(f"✅ Switched to {stream_type} stream")
-                else:
-                    channel.send("⚠️ RealSense not active (using fallback player)")
                 return
 
             try:

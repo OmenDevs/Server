@@ -4,6 +4,7 @@ import os
 import json
 import platform
 import sys
+import asyncio
 
 from dotenv import load_dotenv
 
@@ -90,7 +91,7 @@ def stop_robot_dds():
     except Exception as e:
         console.log(f"⚠️ Failed to send DDS stop command: {e}")
 
-def get_camera_track():
+def get_camera_track(pc):
     """Returns a video track from the robot camera."""
     if REALSENSE_AVAILABLE:
         try:
@@ -114,6 +115,7 @@ def get_camera_track():
             format="v4l2",
             options={"framerate": CAMERA_FRAMERATE, "video_size": CAMERA_RESOLUTION},
         )
+    pc.player = player
     console.log(f"🎥 Camera track created from source: {CAMERA_SOURCE}")
     return player.video
 
@@ -122,6 +124,45 @@ async def home(request):
     """For serving the main HTML page"""
     return web.FileResponse('static/index.html')
 
+async def cleanup_connection(pc, pc_id):
+    """Clean up all resources of peer connection."""
+    if getattr(pc, '_cleaned', False):
+        return
+    pc._cleaned = True
+    console.log(f"🧹 Cleaning up {pc_id}...")
+
+    # 1. Stop recorder if active (saves file and releases ffmpeg resources)
+    if hasattr(pc, 'recorder') and pc.recorder:
+        try:
+            await pc.recorder.stop()
+        except Exception as e:
+            console.log(f"⚠️ Recorder stop error: {e}")
+        pc.recorder = None
+
+    # 2. Close MediaPlayer explicitly to release v4l2 fd
+    if hasattr(pc, 'player') and pc.player:
+        try:
+            if pc.player.video:
+                pc.player.video.stop()
+            container = getattr(pc.player, '_MediaPlayer__container', None)
+            if container:
+                container.close()
+                console.log("📷 v4l2 device released")
+        except Exception as e:
+            console.log(f"⚠️ Player close error: {e}")
+        pc.player = None
+
+    # 3. Stop Robot
+    stop_robot_dds()
+
+    # 4. Close peer connection
+    try:
+        await pc.close()
+    except Exception:
+        pass
+
+    active_connections.pop(pc_id, None)
+    console.log(f"✅ Cleaned up {pc_id}. Active: {len(active_connections)}")
 
 async def offer(request):
     """
@@ -139,6 +180,7 @@ async def offer(request):
 
     pc = RTCPeerConnection()
     pc_id = f"pc_{id(pc)}"
+    pc.player = None
     active_connections[pc_id] = pc
 
     pc.recorder = MediaRecorder(f"{OUTPUT_DIR}/{pc_id}.mp4", format='mp4') if ENABLE_RECORDING else None
@@ -148,7 +190,7 @@ async def offer(request):
     # Add camera track 
     video_track_active = False
     try:
-        video_track = get_camera_track()
+        video_track = get_camera_track(pc)
         pc.addTrack(video_track)
         video_track_active = True
         if pc.recorder:
@@ -188,6 +230,7 @@ async def offer(request):
             try:
                 cmd = json.loads(message)
                 if all(k in cmd for k in ("vx", "vy", "omega")):
+                    console.log(f"📩 Command: {json.dumps(cmd)}")
                     dds_writer.write(VelocityCommand(
                         vx=float(cmd["vx"]),
                         vy=float(cmd["vy"]),
@@ -202,10 +245,7 @@ async def offer(request):
         # This events are triggered when the data channel is closed/error.
         def on_data_channel_issue(reason: str):
             console.log(f"⚠️ Data channel issue: {reason}")
-            console.log(f"🗑️ Eliminating {pc_id} from active connections")
-            stop_robot_dds()
-            active_connections.pop(pc_id, None)
-            console.log(f"📊 Active connections: {len(active_connections)}")
+            asyncio.ensure_future(cleanup_connection(pc, pc_id))
         @channel.on('close')
         def on_data_channel_close():
             on_data_channel_issue("🔴 closed")
@@ -219,16 +259,8 @@ async def offer(request):
         console.log(f"🔄 State: {pc.connectionState}")
         if pc.connectionState in ("failed", "closed", "disconnected"):
             nonlocal video_track_active
-            if hasattr(pc, 'recorder') and pc.recorder and video_track_active:
-                try:
-                    await pc.recorder.stop()
-                except Exception as e:
-                    console.log(f"⚠️ Error stopping recorder: {e}")
             video_track_active = False
-            await pc.close()
-            stop_robot_dds()
-            active_connections.pop(pc_id, None)
-            console.log(f"🗑️  Removed {pc_id}. Active: {len(active_connections)}")
+            await cleanup_connection(pc, pc_id)
 
     # SDP negotiation
     await pc.setRemoteDescription(offer_sdp)
@@ -254,25 +286,9 @@ async def stop(request):
     pc_id = data.get("connectionId")
     pc = active_connections.get(pc_id)
     if pc:
-        #Stop the recorder if it exists.
-        if hasattr(pc, 'recorder') and pc.recorder: 
-            try:
-                await pc.recorder.stop()
-            except Exception as e:
-                console.log(f"⚠️ Error stopping recorder: {e}")
-        # Close the peer connection.
-        try: 
-            await pc.close()
-            console.log(f"✅ Closed {pc_id}")
-        except Exception as e:
-            console.log(f"⚠️ Error closing peer connection {pc_id}: {e}")
-
-        stop_robot_dds()
-        active_connections.pop(pc_id, None)
-
+        await cleanup_connection(pc, pc_id)
         return web.Response(text="ok")
     return web.Response(status=404, text="not found")
-
 
 def get_private_ip():
     """Gets the private IP address for network connections."""

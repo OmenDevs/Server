@@ -4,6 +4,8 @@ import os
 import json
 import platform
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -56,8 +58,11 @@ CAMERA_SOURCE      = os.getenv("CAMERA_SOURCE", "0")
 CAMERA_FRAMERATE   = os.getenv("CAMERA_FRAMERATE", "30")
 CAMERA_RESOLUTION  = os.getenv("CAMERA_RESOLUTION", "1280x720")
 ENABLE_RECORDING   = os.getenv("ENABLE_RECORDING", "false").lower() == "true"
+ENABLE_COMMAND_LOG = os.getenv("ENABLE_COMMAND_LOG", "true").lower() == "true"
 CERT_FILE          = os.getenv("CERT_FILE", os.path.join(ROOT, "cert.pem"))
 KEY_FILE           = os.getenv("KEY_FILE", os.path.join(ROOT, "key.pem"))
+
+_CET = ZoneInfo("Europe/Rome")
 
 # Active peer connections dictionary for managing multiple clients.
 active_connections = {}
@@ -89,6 +94,16 @@ def stop_robot_dds():
         console.log("🛑 Robot safely stopped via DDS.")
     except Exception as e:
         console.log(f"⚠️ Failed to send DDS stop command: {e}")
+
+def close_command_log(pc):
+    if hasattr(pc, 'command_log') and pc.command_log:
+        log_name = os.path.basename(pc.command_log.name)
+        try:
+            pc.command_log.close()
+            console.log(f"💾 Command log saved: {log_name}")
+        except Exception as e:
+            console.log(f"⚠️ Error closing command log: {e}")
+        pc.command_log = None
 
 def get_camera_track():
     """Returns a video track from the robot camera."""
@@ -141,9 +156,17 @@ async def offer(request):
     pc_id = f"pc_{id(pc)}"
     active_connections[pc_id] = pc
 
-    pc.recorder = MediaRecorder(f"{OUTPUT_DIR}/{pc_id}.mp4", format='mp4') if ENABLE_RECORDING else None
+    session_name = datetime.now(_CET).strftime('session %Y-%m-%d at %H.%M.%S')
+    pc.recorder = MediaRecorder(f"{OUTPUT_DIR}/{session_name}.mp4", format='mp4') if ENABLE_RECORDING else None
 
-    console.log(f"🔗 New connection: {pc_id}")
+    if ENABLE_COMMAND_LOG:
+        log_path = os.path.join(OUTPUT_DIR, f"{session_name}.txt")
+        pc.command_log = open(log_path, 'w', buffering=1)
+        pc.command_log.write("timestamp,vx,vy,omega\n")
+    else:
+        pc.command_log = None
+
+    console.log(f"🔗 New connection: {pc_id} → {session_name}")
 
     # Add camera track 
     video_track_active = False
@@ -163,7 +186,7 @@ async def offer(request):
             if pc.recorder:
                 await pc.recorder.stop()
                 pc.recorder = None
-                console.log(f"🎥 Recording saved: {OUTPUT_DIR}/{pc_id}.mp4")
+                console.log(f"🎥 Recording saved: {OUTPUT_DIR}/{session_name}.mp4")
     except Exception as e:
         console.log(f"❌ Could not open camera: {e}")
         # Fallback: test pattern so connection can still be verified
@@ -188,11 +211,15 @@ async def offer(request):
             try:
                 cmd = json.loads(message)
                 if all(k in cmd for k in ("vx", "vy", "omega")):
+                    console.log(f"📩 Command: {json.dumps(cmd)}")
                     dds_writer.write(VelocityCommand(
                         vx=float(cmd["vx"]),
                         vy=float(cmd["vy"]),
                         omega=float(cmd["omega"]),
                     ))
+                    if pc.command_log:
+                        ts = datetime.now(_CET).strftime('%Y-%m-%dT%H:%M:%S')
+                        pc.command_log.write(f"{ts},{cmd['vx']},{cmd['vy']},{cmd['omega']}\n")
                     return
                 console.log(f"📩 Unrecognized JSON format: {cmd}")
             except json.JSONDecodeError:
@@ -204,6 +231,7 @@ async def offer(request):
             console.log(f"⚠️ Data channel issue: {reason}")
             console.log(f"🗑️ Eliminating {pc_id} from active connections")
             stop_robot_dds()
+            close_command_log(pc)
             active_connections.pop(pc_id, None)
             console.log(f"📊 Active connections: {len(active_connections)}")
         @channel.on('close')
@@ -227,6 +255,7 @@ async def offer(request):
             video_track_active = False
             await pc.close()
             stop_robot_dds()
+            close_command_log(pc)
             active_connections.pop(pc_id, None)
             console.log(f"🗑️  Removed {pc_id}. Active: {len(active_connections)}")
 
@@ -237,7 +266,7 @@ async def offer(request):
     console.log(f"✅ SDP answer sent to {pc_id}")
     if video_track_active and pc.recorder:
         await pc.recorder.start()
-        console.log(f"🎥 Recording started for {pc_id}")
+        console.log(f"🎥 Recording started for {session_name}")
 
     return web.Response(
         content_type="application/json",
@@ -261,13 +290,14 @@ async def stop(request):
             except Exception as e:
                 console.log(f"⚠️ Error stopping recorder: {e}")
         # Close the peer connection.
-        try: 
+        try:
             await pc.close()
             console.log(f"✅ Closed {pc_id}")
         except Exception as e:
             console.log(f"⚠️ Error closing peer connection {pc_id}: {e}")
 
         stop_robot_dds()
+        close_command_log(pc)
         active_connections.pop(pc_id, None)
 
         return web.Response(text="ok")
@@ -311,6 +341,7 @@ if __name__ == "__main__":
     console.log("=" * 55)
     console.log(f"📹 Camera source: {CAMERA_SOURCE}  |  {CAMERA_RESOLUTION} @ {CAMERA_FRAMERATE}fps")
     console.log(f"🎥 Recording: {'enabled' if ENABLE_RECORDING else 'disabled'}")
+    console.log(f"📝 Command log: {'enabled' if ENABLE_COMMAND_LOG else 'disabled'}")
     console.log("📱 Use the Network URL in your Vision Pro app")
     console.log("=" * 55)
 

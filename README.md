@@ -48,7 +48,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### 2. Install Python Server dependencies
 
 ```bash
-cd Locomotion/Server
+cd ArteServer
 pip3 install -r requirements.txt
 ```
 
@@ -77,29 +77,18 @@ cp .env.example .env
 | `CAMERA_FRAMERATE` | `30` | Stream frame rate |
 | `CAMERA_RESOLUTION` | `1280x720` | Stream resolution |
 | `ENABLE_RECORDING` | `false` | Set to `true` to save sessions to `recordings/` |
+| `ENABLE_COMMAND_LOG` | `false` | Set to `true` to save commands to `recordings/` |
 
 ---
 
 ### 5. Run the server
 
 ```bash
-sudo python3 Server/app.py   # macOS
-python3 Server/app.py        # Ubuntu (after udev rules)
+sudo python3 app.py   # macOS
+python3 app.py        # Ubuntu (after udev rules)
 ```
 
 The server prints its local and network URLs on startup. Use the **Network URL** in the iOS app.
-
----
-
-## Stream Switching
-
-The client can switch streams in real time over the WebRTC data channel:
-
-| Command | Stream |
-|---|---|
-| `stream:color` | RGB color (default) |
-| `stream:depth` | Colorized depth map |
-| `stream:infrared` | Infrared (grayscale) |
 
 ---
 

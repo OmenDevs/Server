@@ -1,6 +1,6 @@
 # Locomotion — Robot Camera Server 🤖
 
-WebRTC server that streams a RealSense D435i camera to an iOS/visionOS client, with real-time depth, color, and infrared stream switching.
+WebRTC server that streams a RealSense D435i camera to an iOS/visionOS client.
 
 ## Requirements
 

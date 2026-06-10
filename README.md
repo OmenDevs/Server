@@ -48,7 +48,7 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### 2. Install Python Server dependencies
 
 ```bash
-cd ArteServer
+cd Server
 pip3 install -r requirements.txt
 ```
 
